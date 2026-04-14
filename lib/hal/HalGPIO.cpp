@@ -263,8 +263,8 @@ void HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
     // Calibrate using total elapsed time since boot (boot time + time spent in the wait loop above).
     // By the time the button becomes detectable (~1s on battery), this typically already exceeds
     // requiredDurationMs, so calibratedDuration collapses to 1ms and no extra hold is needed.
-    const uint16_t elapsed = static_cast<uint16_t>(millis());
-    const uint16_t calibratedDuration = (elapsed < requiredDurationMs) ? (requiredDurationMs - elapsed) : 1;
+    const uint32_t elapsed = millis();
+    const uint16_t calibratedDuration = (elapsed < requiredDurationMs) ? (requiredDurationMs - static_cast<uint16_t>(elapsed)) : 1;
     do {
       delay(10);
       inputMgr.update();
