@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <SPI.h>
 #include <Wire.h>
+#include <driver/gpio.h>
 #include <esp_sleep.h>
 
 // Global HalGPIO instance
@@ -229,6 +230,15 @@ void HalGPIO::startDeepSleep() {
     delay(50);
     inputMgr.update();
   }
+  // Pre-sleep routines from the original firmware (must match HalPowerManager::startDeepSleep)
+  // GPIO13 is connected to battery latch MOSFET, we need to make sure it's low during sleep
+  constexpr gpio_num_t GPIO_SPIWP = GPIO_NUM_13;
+  gpio_set_direction(GPIO_SPIWP, GPIO_MODE_OUTPUT);
+  gpio_set_level(GPIO_SPIWP, 0);
+  esp_sleep_config_gpio_isolate();
+  gpio_deep_sleep_hold_en();
+  gpio_hold_en(GPIO_SPIWP);
+  pinMode(InputManager::POWER_BUTTON_PIN, INPUT_PULLUP);
   // Arm the wakeup trigger *after* the button is released
   esp_deep_sleep_enable_gpio_wakeup(1ULL << InputManager::POWER_BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
   // Enter Deep Sleep
@@ -240,21 +250,21 @@ void HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
     // Fast path - no duration check needed
     return;
   }
-  // TODO: Intermittent edge case remains: a single tap followed by another single tap
-  // can still power on the device. Tighten wake debounce/state handling here.
 
-  // Calibrate: subtract boot time already elapsed, assuming button held since boot
-  const uint16_t calibration = millis();
-  const uint16_t calibratedDuration = (calibration < requiredDurationMs) ? (requiredDurationMs - calibration) : 1;
-
+  // On battery wake, the power button pin is pulled HIGH by the hardware POWER_CTRL circuit for ~1 second
+  // after wakeup, making it undetectable during this window. Wait up to 1500ms to accommodate this.
   const auto start = millis();
   inputMgr.update();
-  // inputMgr.isPressed() may take up to ~500ms to return correct state
-  while (!inputMgr.isPressed(BTN_POWER) && millis() - start < 1000) {
+  while (!inputMgr.isPressed(BTN_POWER) && millis() - start < 1500) {
     delay(10);
     inputMgr.update();
   }
   if (inputMgr.isPressed(BTN_POWER)) {
+    // Calibrate using total elapsed time since boot (boot time + time spent in the wait loop above).
+    // By the time the button becomes detectable (~1s on battery), this typically already exceeds
+    // requiredDurationMs, so calibratedDuration collapses to 1ms and no extra hold is needed.
+    const uint16_t elapsed = static_cast<uint16_t>(millis());
+    const uint16_t calibratedDuration = (elapsed < requiredDurationMs) ? (requiredDurationMs - elapsed) : 1;
     do {
       delay(10);
       inputMgr.update();
